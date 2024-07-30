@@ -1,8 +1,7 @@
-import { Body, Controller, Post, Query, Req, Res } from '@nestjs/common';
+import { Controller, Post, Query, Req, Res } from '@nestjs/common';
 import { FileService } from './file.service';
-import { FileHandle, open, writeFile } from 'fs/promises';
+import { open } from 'fs/promises';
 import { Request, Response } from 'express';
-import { appendFileSync, writeFileSync, WriteStream } from 'fs';
 
 @Controller('file')
 export class FileController {
@@ -14,43 +13,38 @@ export class FileController {
     @Res() response: Response,
     @Query('fileName') fileName: string,
   ) {
-    let fileHandle: FileHandle, fileStream: WriteStream;
     try {
-      request.on('data', async (chunk) => {
-        if (!fileHandle) {
-          request.pause();
-          fileHandle = await open(`${fileName}`, 'a');
-          fileStream = fileHandle.createWriteStream({ autoClose: false });
-          request.resume();
-          fileStream.on('drain', () => {
-            request.resume();
-          });
+      // opens the file for appending the file is created if it does not exist.
+      const file = await open(fileName, 'a');
+      const writeStream = file?.createWriteStream();
+      const readStream = request;
+      readStream.on('data', (chunk) => {
+        // check if it is safe to write to the stream
+        if (writeStream.writable) {
+          writeStream.write(chunk);
         } else {
-          if (!fileStream.write(chunk)) {
-            request.pause();
-          }
-        }
-
-        if (!fileStream.write(chunk)) {
+          // pausing the data flow until drain event finishes
           request.pause();
         }
       });
 
-      request.on('end', async () => {
-        // await fileHandle.close();
-        fileHandle = undefined;
-        fileStream = undefined;
-        console.log('Connection ended');
-        response.end(
-          JSON.stringify({ message: 'File was uploaded successfully!' }),
-        );
+      writeStream.on('drain', () => {
+        console.log('drained');
+        request.resume();
       });
+      // close the file after sending the response to prevent memory leaks
+      response.on('close', async () => {
+        await file.close();
+      });
+      response.end('uploaded');
+
+      // or instead of the code above we can use pipline method it automatically handles draining for us
+
+      // pipeline(readStream, writeStream, (err) => {
+      //   if (err) console.log(err);
+      // });
     } catch (error) {
       console.log(error);
-    } finally {
-      if (fileHandle) {
-        fileHandle.close();
-      }
     }
   }
 }
